@@ -134,20 +134,8 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 st.sidebar.title("🔍 検索条件")
 st.sidebar.markdown("---")
 
-# 現在地の推測 (簡易版 IPベース)
-@st.cache_data
-def get_initial_city():
-    try:
-        res = requests.get("https://ipapi.co/json/", timeout=5)
-        if res.status_code == 200:
-            return res.json().get("city", "東京")
-    except:
-        pass
-    return "東京"
-
-default_from = get_initial_city()
-from_city = st.sidebar.text_input("出発地 (From)", value=default_from, help="都市名を入力してください")
-to_city = st.sidebar.text_input("目的地 (To)", value="大阪", help="天気を表示する都市名を入力してください")
+from_city = st.sidebar.text_input("出発地 (From)", value="YOKOHAMA", help="都市名を入力してください")
+to_city = st.sidebar.text_input("目的地 (To)", value="TOKYO", help="天気を表示する都市名を入力してください")
 
 # 期間選択
 today = datetime.now().date()
