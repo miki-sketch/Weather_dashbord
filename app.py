@@ -1,10 +1,8 @@
 import streamlit as st
-import pandas as pd
 import yaml
 import os
 import json
 import re
-import difflib
 import gspread
 from google.oauth2.service_account import Credentials
 from typing import Optional
@@ -24,10 +22,8 @@ st.set_page_config(
 # ============================================================
 st.markdown("""
 <style>
-    /* ---- 全体 ---- */
     .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
 
-    /* ---- 運賃結果ボックス ---- */
     .fare-result-box {
         font-size: 3.5rem;
         font-weight: bold;
@@ -42,7 +38,6 @@ st.markdown("""
         letter-spacing: 0.04em;
     }
 
-    /* ---- 参照情報ボックス ---- */
     .ref-box {
         background-color: #f8f9fa;
         padding: 14px 18px;
@@ -54,16 +49,6 @@ st.markdown("""
     .ref-box b { color: #495057; font-size: 0.85rem; display: block; margin-bottom: 4px; }
     .ref-value { font-size: 1.25rem; font-weight: 600; color: #212529; }
 
-    /* ---- 警告/候補ボックス ---- */
-    .fuzzy-notice {
-        background-color: #fff3cd;
-        border-left: 5px solid #ffc107;
-        padding: 12px 16px;
-        border-radius: 8px;
-        margin: 8px 0;
-    }
-
-    /* ---- 年度バッジ ---- */
     .year-badge {
         display: inline-block;
         background-color: #0d6efd;
@@ -75,7 +60,6 @@ st.markdown("""
         margin-bottom: 8px;
     }
 
-    /* ---- スマホ対応 ---- */
     @media (max-width: 768px) {
         .fare-result-box { font-size: 2.4rem; padding: 20px 12px; }
         .ref-value { font-size: 1.1rem; }
@@ -102,14 +86,13 @@ def load_config() -> dict:
 def get_gspread_client() -> gspread.Client:
     """
     環境変数 GOOGLE_CREDENTIALS (JSON文字列) または
-    ファイルパス GOOGLE_CREDENTIALS_FILE からサービスアカウント認証を行う。
+    credentials.json ファイルから認証する。
     """
     scopes = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
 
-    # 方法1: 環境変数に JSON 文字列が直接入っている場合
     creds_json_str = os.environ.get("GOOGLE_CREDENTIALS", "")
     if creds_json_str:
         try:
@@ -120,7 +103,6 @@ def get_gspread_client() -> gspread.Client:
             st.error(f"GOOGLE_CREDENTIALS の JSON パースに失敗しました: {e}")
             st.stop()
 
-    # 方法2: 環境変数にファイルパスが入っている場合
     creds_file = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
     if os.path.exists(creds_file):
         creds = Credentials.from_service_account_file(creds_file, scopes=scopes)
@@ -137,7 +119,7 @@ def get_gspread_client() -> gspread.Client:
 
 
 # ============================================================
-# データ取得・解析ロジック
+# ユーティリティ
 # ============================================================
 def _normalize_city(name: str) -> str:
     """全角・半角スペースを全て除去して比較用に正規化する。"""
@@ -146,170 +128,116 @@ def _normalize_city(name: str) -> str:
 
 def _parse_number(text: str) -> Optional[float]:
     """
-    "20 kg", "30KG", "1,500", "1500.5" など単位・記号混じりの文字列から
-    数値部分だけを正規表現で抽出して float に変換する。
-    空文字・ヘッダー文字列・変換不能な値はすべて None を返す（例外を起こさない）。
+    "20 kg"、"1,500" など単位・記号混じりの文字列から数値を抽出する。
+    変換不能な場合は None を返す。
     """
     if not text or not text.strip():
         return None
-    # 全角数字・カンマを半角に正規化
-    normalized = text.strip()
-    normalized = normalized.translate(str.maketrans("０１２３４５６７８９，．", "0123456789,."))
-    # 数字・ドット・カンマ・先頭マイナスのみを抽出（最初にマッチした塊を使用）
+    normalized = text.strip().translate(
+        str.maketrans("０１２３４５６７８９，．", "0123456789,.")
+    )
     match = re.search(r"-?[\d,]+\.?\d*", normalized)
     if not match:
         return None
-    num_str = match.group().replace(",", "")
     try:
-        return float(num_str)
+        return float(match.group().replace(",", ""))
     except ValueError:
         return None
 
 
+# ============================================================
+# データ取得 (OKTable: A=都市名, B=重量, C=運賃 のフラットリスト)
+# ============================================================
 @st.cache_data(ttl=3600, show_spinner="スプレッドシートからデータを取得しています...")
-def load_fare_data(spreadsheet_id: str, sheet_name: str, sheet_index: int,
-                   city_row_start: int, city_row_end: int,
-                   weight_row_start: int) -> tuple:
+def load_fare_data(spreadsheet_id: str, sheet_name: str) -> tuple:
     """
-    スプレッドシートから運賃テーブルを構築して返す。
+    OKTable シートを読み込み、運賃テーブルを構築する。
 
     Returns:
-        unique_cities   : ユニークな都市名リスト (列順)
-        weights         : 重量リスト (昇順)
-        fare_table      : dict[city_name][weight] = fare (float)
-        col_to_city     : dict[col_index(0始まり)] = city_name
+        unique_cities : ユニークな都市名リスト（正規化済み、出現順）
+        weights       : 重量リスト（昇順・重複なし）
+        fare_table    : dict[正規化都市名][重量(float)] = 運賃(float)
     """
     gc = get_gspread_client()
 
+    # --- シート取得 ---
     try:
         ss = gc.open_by_key(spreadsheet_id)
-        if sheet_name:
-            ws = ss.worksheet(sheet_name)
-        else:
-            ws = ss.get_worksheet(sheet_index)
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"スプレッドシートID `{spreadsheet_id}` が見つかりません。config.yaml を確認してください。")
+        st.error(
+            f"スプレッドシートが見つかりません。\n"
+            f"ID: `{spreadsheet_id}`\n\n"
+            "config.yaml のIDとサービスアカウントの共有設定を確認してください。"
+        )
         st.stop()
+
+    try:
+        ws = ss.worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        st.error(f"シート `{sheet_name or sheet_index}` が見つかりません。")
-        st.stop()
-
-    # 全セルを取得 (list of list of str)
-    all_values: list[list[str]] = ws.get_all_values()
-
-    # ------------------------------------------------------------------
-    # 1. 都市名の抽出
-    # ------------------------------------------------------------------
-    # スキャン行範囲 (0始まり): city_row_start〜city_row_end (1始まり) を変換
-    scan_r_start = city_row_start - 1   # e.g. row4(1始まり) → index 3
-    scan_r_end   = city_row_end         # exclusive: row14(1始まり) → slice [3:14]
-
-    # 全行の最大列数（データ行も含めてカバー）
-    max_col = max((len(row) for row in all_values), default=0)
-
-    # C列 (index 2) から右へ、列ごとに縦スキャンして都市名を確定する
-    # ・該当行範囲に1つでも非空値があれば、最初の非空値を採用
-    # ・全て空の場合は左隣の都市名を横方向で引き継ぐ（結合セル対応）
-    col_to_city: dict[int, str] = {}
-
-    for col_idx in range(2, max_col):  # C列 (index 2) ～
-        city_name = None
-        for row_idx in range(scan_r_start, min(scan_r_end, len(all_values))):
-            cell = all_values[row_idx][col_idx].strip() \
-                   if col_idx < len(all_values[row_idx]) else ""
-            if cell:
-                city_name = _normalize_city(cell)   # スペース除去して格納
-                break
-
-        if city_name:
-            col_to_city[col_idx] = city_name
-        elif col_idx - 1 in col_to_city:
-            # 縦スキャンで見つからなかった → 左隣の都市名を引き継ぐ
-            col_to_city[col_idx] = col_to_city[col_idx - 1]
-
-    # ユニーク都市リスト (列順を保持、重複除去)
-    seen: set[str] = set()
-    unique_cities: list[str] = []
-    for col_idx in sorted(col_to_city.keys()):
-        city = col_to_city[col_idx]
-        if city not in seen:
-            unique_cities.append(city)
-            seen.add(city)
-
-    if not unique_cities:
+        available = [w.title for w in ss.worksheets()]
         st.error(
-            f"都市名が取得できませんでした。\n"
-            f"スプレッドシートの {city_row_start}〜{city_row_end} 行目にデータが存在するか確認してください。"
+            f"シート「{sheet_name}」が見つかりません。\n\n"
+            f"利用可能なシート: {', '.join(available)}"
         )
         st.stop()
 
-    # ------------------------------------------------------------------
-    # 2. 重量リストの抽出 (A列, row weight_row_start 以降)
-    # ------------------------------------------------------------------
-    w_start = weight_row_start - 1  # 0始まり
-    weights: list[float] = []
-    weight_row_map: list[int] = []  # 各重量が何行目(0始まり)にあるか
+    # --- 全行取得 ---
+    all_rows = ws.get_all_values()
 
-    for row_idx in range(w_start, len(all_values)):
-        row = all_values[row_idx]
-        if not row or not row[0].strip():
+    if not all_rows:
+        st.error(f"シート「{sheet_name}」にデータがありません。")
+        st.stop()
+
+    # --- ヘッダー行をスキップ (B列が数値に変換できない行を飛ばす) ---
+    fare_table: dict[str, dict[float, float]] = {}
+    seen_cities: list[str] = []
+    seen_set: set[str] = set()
+
+    for row in all_rows:
+        # 列数が 3 未満の行はスキップ
+        if len(row) < 3:
             continue
-        val = _parse_number(row[0])
-        if val is not None:
-            weights.append(val)
-            weight_row_map.append(row_idx)
 
-    if not weights:
+        city_raw  = row[0].strip()
+        weight_raw = row[1].strip()
+        fare_raw   = row[2].strip()
+
+        # 都市名が空 → スキップ
+        if not city_raw:
+            continue
+
+        # 重量・運賃が数値でない → ヘッダー行などとみなしてスキップ
+        weight = _parse_number(weight_raw)
+        fare   = _parse_number(fare_raw)
+        if weight is None or fare is None:
+            continue
+
+        # 都市名を正規化（スペース除去）してキーとして使用
+        city = _normalize_city(city_raw)
+
+        if city not in seen_set:
+            seen_cities.append(city)
+            seen_set.add(city)
+            fare_table[city] = {}
+
+        fare_table[city][weight] = fare
+
+    if not fare_table:
         st.error(
-            f"重量データが取得できませんでした。\n"
-            f"A列の {weight_row_start} 行目以降にデータが存在するか確認してください。"
+            f"シート「{sheet_name}」から有効なデータを読み込めませんでした。\n\n"
+            "A列=都市名、B列=重量(数値)、C列=運賃(数値) の形式を確認してください。"
         )
         st.stop()
 
-    # ------------------------------------------------------------------
-    # 3. 運賃テーブルの構築
-    # ------------------------------------------------------------------
-    fare_table: dict[str, dict[float, float]] = {city: {} for city in unique_cities}
+    # 全都市共通の重量リストを昇順で作成
+    all_weights = sorted({w for city_data in fare_table.values() for w in city_data})
 
-    for row_idx, weight in zip(weight_row_map, weights):
-        row = all_values[row_idx]
-        for col_idx, city in col_to_city.items():
-            if col_idx < len(row) and row[col_idx].strip():
-                fare_val = _parse_number(row[col_idx])
-                if fare_val is not None:
-                    fare_table[city][weight] = fare_val
-
-    return unique_cities, sorted(weights), fare_table, col_to_city
+    return seen_cities, all_weights, fare_table
 
 
 # ============================================================
-# 検索ロジック
+# 検索ロジック（完全一致のみ・曖昧検索なし）
 # ============================================================
-def fuzzy_city_match(input_city: str, city_list: list[str],
-                     cutoff: float = 0.4, n: int = 3
-                     ) -> tuple[Optional[str], list[str]]:
-    """
-    都市名の曖昧検索。
-    Returns:
-        best_match  : 最も近い都市名 (完全一致含む)。見つからなければ None。
-        candidates  : 上位候補リスト (best_match を含む)
-    """
-    if input_city in city_list:
-        return input_city, [input_city]
-
-    # 部分一致を先にチェック (前方一致や包含)
-    partial = [c for c in city_list if input_city in c or c in input_city]
-    if partial:
-        return partial[0], partial
-
-    # difflib による類似度検索
-    matches = difflib.get_close_matches(input_city, city_list, n=n, cutoff=cutoff)
-    if matches:
-        return matches[0], matches
-
-    return None, []
-
-
 def find_weight_ceiling(input_weight: float, weights: list[float]) -> Optional[float]:
     """入力重量以上の最小値（切り上げ）を返す。"""
     candidates = [w for w in weights if w >= input_weight]
@@ -321,11 +249,6 @@ def find_weight_ceiling(input_weight: float, weights: list[float]) -> Optional[f
 # ============================================================
 config = load_config()
 spreadsheets_cfg = config.get("spreadsheets", [])
-data_structure = config.get("data_structure", {})
-
-CITY_ROW_START = data_structure.get("city_row_start", 5)
-CITY_ROW_END = data_structure.get("city_row_end", 14)
-WEIGHT_ROW_START = data_structure.get("weight_row_start", 16)
 
 with st.sidebar:
     st.title("⚙️ 設定")
@@ -340,11 +263,10 @@ with st.sidebar:
 
     selected_cfg = next(s for s in spreadsheets_cfg if s["name"] == selected_year_name)
     spreadsheet_id = selected_cfg["id"]
-    sheet_name_cfg = selected_cfg.get("sheet_name", "") or ""
-    sheet_index_cfg = selected_cfg.get("sheet_index", 0)
+    sheet_name_cfg = selected_cfg.get("sheet_name", "OKTable")
 
     st.markdown("---")
-    st.markdown(f"**現在の参照年度**")
+    st.markdown("**現在の参照年度**")
     st.markdown(f'<div class="year-badge">📋 {selected_year_name}</div>', unsafe_allow_html=True)
     st.caption("データは取得後 1 時間キャッシュされます。")
 
@@ -355,13 +277,9 @@ with st.sidebar:
 # ============================================================
 # データ取得
 # ============================================================
-city_list, weights, fare_table, col_to_city = load_fare_data(
+city_list, weights, fare_table = load_fare_data(
     spreadsheet_id=spreadsheet_id,
     sheet_name=sheet_name_cfg,
-    sheet_index=sheet_index_cfg,
-    city_row_start=CITY_ROW_START,
-    city_row_end=CITY_ROW_END,
-    weight_row_start=WEIGHT_ROW_START,
 )
 
 # ============================================================
@@ -381,7 +299,7 @@ with col_city:
     city_input = st.text_input(
         "🌏 行先（都市名）",
         placeholder="例: 上海、バンコク、ロサンゼルス",
-        help="部分一致・曖昧検索対応。入力ミスがあっても自動補正します。",
+        help="都市名を正確に入力してください（全角・半角スペースは無視されます）。",
     )
 
 with col_weight:
@@ -396,7 +314,7 @@ with col_weight:
     )
 
 with col_btn:
-    st.markdown("<br>", unsafe_allow_html=True)  # ラベル分の余白
+    st.markdown("<br>", unsafe_allow_html=True)
     search_clicked = st.button("🔍 検索", type="primary", use_container_width=True)
 
 # --- 検索実行 ---
@@ -404,77 +322,61 @@ if search_clicked:
     if not city_input or weight_input <= 0:
         st.warning("行先と重量（0より大きい値）を入力してください。")
     else:
-        matched_city, candidates = fuzzy_city_match(_normalize_city(city_input), city_list)
-        matched_weight = find_weight_ceiling(weight_input, weights)
+        # 入力都市名を正規化してから完全一致検索
+        normalized_input = _normalize_city(city_input)
 
-        # --- 都市名マッチ結果 ---
-        if matched_city is None:
-            st.error(f"「{city_input}」に近い都市が見つかりませんでした。")
-
-        # --- 重量範囲外 ---
-        elif matched_weight is None:
-            st.error(
-                f"重量 **{weight_input} kg** 以上の運賃データがありません。\n\n"
-                f"このタリフの最大重量: **{max(weights)} kg**"
-            )
+        if normalized_input not in fare_table:
+            st.error(f"「{city_input}」はタリフに存在しません。都市名を正確に入力してください。")
 
         else:
-            # --- 曖昧マッチの通知 ---
-            if city_input != matched_city:
-                other_candidates = [c for c in candidates if c != matched_city]
-                notice_html = (
-                    f'<div class="fuzzy-notice">'
-                    f'「<b>{city_input}</b>」→ <b>{matched_city}</b> に自動補正しました。'
-                )
-                if other_candidates:
-                    notice_html += f"<br>他の候補: {', '.join(other_candidates)}"
-                notice_html += "</div>"
-                st.markdown(notice_html, unsafe_allow_html=True)
+            matched_weight = find_weight_ceiling(weight_input, weights)
 
-            # --- 運賃取得 ---
-            fare = fare_table.get(matched_city, {}).get(matched_weight)
-
-            if fare is None:
+            if matched_weight is None:
                 st.error(
-                    f"「{matched_city}」× **{matched_weight} kg** の運賃データが見つかりません。\n\n"
-                    "スプレッドシートのデータを確認してください。"
+                    f"重量 **{weight_input} kg** 以上の運賃データがありません。\n\n"
+                    f"このタリフの最大重量: **{max(weights):g} kg**"
                 )
+
             else:
-                st.markdown("---")
-                st.subheader("📊 検索結果")
+                fare = fare_table[normalized_input].get(matched_weight)
 
-                # 参照情報の表示
-                ref_col1, ref_col2 = st.columns(2)
-                with ref_col1:
+                if fare is None:
+                    st.error(
+                        f"「{city_input}」× **{matched_weight:g} kg** の運賃データが見つかりません。\n\n"
+                        "OKTable のデータを確認してください。"
+                    )
+                else:
+                    st.markdown("---")
+                    st.subheader("📊 検索結果")
+
+                    ref_col1, ref_col2 = st.columns(2)
+                    with ref_col1:
+                        st.markdown(
+                            f'<div class="ref-box">'
+                            f'<b>参照した都市名</b>'
+                            f'<span class="ref-value">{normalized_input}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    with ref_col2:
+                        weight_note = f"（入力: {weight_input:g} kg → 切り上げ）" \
+                                      if weight_input != matched_weight else ""
+                        st.markdown(
+                            f'<div class="ref-box">'
+                            f'<b>参照した重量 {weight_note}</b>'
+                            f'<span class="ref-value">{matched_weight:g} kg</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
                     st.markdown(
-                        f'<div class="ref-box">'
-                        f'<b>参照した都市名</b>'
-                        f'<span class="ref-value">{matched_city}</span>'
-                        f'</div>',
+                        f'<div class="fare-result-box">¥ {int(fare):,}</div>',
                         unsafe_allow_html=True,
                     )
-                with ref_col2:
-                    weight_note = ""
-                    if weight_input != matched_weight:
-                        weight_note = f"（入力: {weight_input} kg → 切り上げ）"
-                    st.markdown(
-                        f'<div class="ref-box">'
-                        f'<b>参照した重量 {weight_note}</b>'
-                        f'<span class="ref-value">{matched_weight} kg</span>'
-                        f'</div>',
-                        unsafe_allow_html=True,
+
+                    st.metric(
+                        label=f"{normalized_input}  |  {matched_weight:g} kg  |  {selected_year_name}",
+                        value=f"¥{int(fare):,}",
                     )
-
-                # 運賃の大きな表示
-                st.markdown(
-                    f'<div class="fare-result-box">¥ {int(fare):,}</div>',
-                    unsafe_allow_html=True,
-                )
-
-                # st.metric でも補足表示
-                st.metric(
-                    label=f"{matched_city}  |  {matched_weight} kg  |  {selected_year_name}",
-                    value=f"¥{int(fare):,}",
-                )
 
 st.caption(f"© 富士ミネラル向けタリフ | 参照タリフ: {selected_year_name}")

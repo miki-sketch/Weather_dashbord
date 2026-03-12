@@ -5,22 +5,12 @@
 spreadsheets:
   - name: "2022年度版"
     id: "1-V8rDl_HlAOE03FESWsKwYCBuZC2VmLC66mS01_Yw4c"
-    sheet_index: 0        # シートのインデックス (0始まり)。sheet_nameが優先されます。
-    sheet_name: "Table 1"        # シート名で指定する場合はここに入力 (空欄=インデックスを使用)
+    sheet_name: "OKTable"
 
   - name: "2025年度版"
     id: "YOUR_SPREADSHEET_ID_2025"
-    sheet_index: 0
-    sheet_name: ""
+    sheet_name: "OKTable"
 
   - name: "テスト"
     id: "YOUR_SPREADSHEET_ID_TEST"
-    sheet_index: 0
-    sheet_name: ""
-
-# スプレッドシートのデータ構造設定
-data_structure:
-  city_row_start: 4      # 都市名が存在する行の開始（1始まり）
-  city_row_end: 14       # 都市名が存在する行の終了（1始まり）
-  weight_col: "A"        # 重量が記載されている列
-  weight_row_start: 16   # 重量データの開始行（1始まり）
+    sheet_name: "OKTable"
