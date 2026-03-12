@@ -13,8 +13,8 @@ from typing import Optional
 # ページ設定 (必ず最初に呼ぶ)
 # ============================================================
 st.set_page_config(
-    page_title="運賃検索システム",
-    page_icon="✈️",
+    page_title="富士ミネラル向けタリフ",
+    page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -204,7 +204,8 @@ def load_fare_data(spreadsheet_id: str, sheet_name: str, sheet_index: int,
     # 結合セル対応: 行を上から下にスキャンし、空セルは直前の値を引き継ぐ (forward fill)
     # col 0 = A列 (重量列) なので col 1 以降が対象
     col_to_city: dict[int, str] = {}
-    max_col = max((len(row) for row in city_header_rows), default=0)
+    # データ行（16行目以降）の列数も考慮して全列をカバーする
+    max_col = max((len(row) for row in all_values), default=0)
 
     # 各列の「直前に見た非空値」を保持するバッファ
     last_seen: dict[int, str] = {}
@@ -357,7 +358,7 @@ city_list, weights, fare_table, col_to_city = load_fare_data(
 # ============================================================
 # メイン UI
 # ============================================================
-st.title("✈️ 運賃検索システム")
+st.title("💧 富士ミネラル向けタリフ")
 st.markdown(
     f'<span class="year-badge">参照タリフ: {selected_year_name}</span>',
     unsafe_allow_html=True,
@@ -400,8 +401,6 @@ if search_clicked:
         # --- 都市名マッチ結果 ---
         if matched_city is None:
             st.error(f"「{city_input}」に近い都市が見つかりませんでした。")
-            with st.expander("利用可能な都市一覧"):
-                st.write("、".join(city_list))
 
         # --- 重量範囲外 ---
         elif matched_weight is None:
@@ -469,23 +468,4 @@ if search_clicked:
                     value=f"¥{int(fare):,}",
                 )
 
-# ============================================================
-# フッター: 都市・重量情報 (折りたたみ)
-# ============================================================
-st.markdown("---")
-col_exp1, col_exp2 = st.columns(2)
-
-with col_exp1:
-    with st.expander(f"🌍 利用可能な都市一覧 ({len(city_list)}件)"):
-        # 5列グリッドで表示
-        chunk_size = max(1, (len(city_list) + 4) // 5)
-        cols = st.columns(5)
-        for i, city in enumerate(city_list):
-            cols[i % 5].write(city)
-
-with col_exp2:
-    with st.expander(f"⚖️ 重量区分一覧 ({len(weights)}段階)"):
-        w_df = pd.DataFrame({"重量 (kg)": [f"{w:g}" for w in weights]})
-        st.dataframe(w_df, hide_index=True, use_container_width=True)
-
-st.caption(f"© 運賃検索システム | 参照タリフ: {selected_year_name}")
+st.caption(f"© 富士ミネラル向けタリフ | 参照タリフ: {selected_year_name}")
