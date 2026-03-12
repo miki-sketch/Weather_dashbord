@@ -139,6 +139,11 @@ def get_gspread_client() -> gspread.Client:
 # ============================================================
 # データ取得・解析ロジック
 # ============================================================
+def _normalize_city(name: str) -> str:
+    """全角・半角スペースを全て除去して比較用に正規化する。"""
+    return name.replace(" ", "").replace("　", "")
+
+
 def _parse_number(text: str) -> Optional[float]:
     """
     "20 kg", "30KG", "1,500", "1500.5" など単位・記号混じりの文字列から
@@ -193,30 +198,34 @@ def load_fare_data(spreadsheet_id: str, sheet_name: str, sheet_index: int,
     all_values: list[list[str]] = ws.get_all_values()
 
     # ------------------------------------------------------------------
-    # 1. 都市名の抽出 (rows city_row_start ~ city_row_end, 1始まり)
+    # 1. 都市名の抽出
     # ------------------------------------------------------------------
-    # 0始まりインデックスに変換
-    r_start = city_row_start - 1  # e.g. 5-1=4
-    r_end = city_row_end          # e.g. 14 (sliceは exclusive なので14のまま)
+    # スキャン行範囲 (0始まり): city_row_start〜city_row_end (1始まり) を変換
+    scan_r_start = city_row_start - 1   # e.g. row4(1始まり) → index 3
+    scan_r_end   = city_row_end         # exclusive: row14(1始まり) → slice [3:14]
 
-    city_header_rows = all_values[r_start:r_end]
-
-    # 結合セル対応: 行を上から下にスキャンし、空セルは直前の値を引き継ぐ (forward fill)
-    # col 0 = A列 (重量列) なので col 1 以降が対象
-    col_to_city: dict[int, str] = {}
-    # データ行（16行目以降）の列数も考慮して全列をカバーする
+    # 全行の最大列数（データ行も含めてカバー）
     max_col = max((len(row) for row in all_values), default=0)
 
-    # 各列の「直前に見た非空値」を保持するバッファ
-    last_seen: dict[int, str] = {}
-    for row in city_header_rows:
-        for col_idx in range(1, max_col):
-            cell = row[col_idx].strip() if col_idx < len(row) else ""
+    # C列 (index 2) から右へ、列ごとに縦スキャンして都市名を確定する
+    # ・該当行範囲に1つでも非空値があれば、最初の非空値を採用
+    # ・全て空の場合は左隣の都市名を横方向で引き継ぐ（結合セル対応）
+    col_to_city: dict[int, str] = {}
+
+    for col_idx in range(2, max_col):  # C列 (index 2) ～
+        city_name = None
+        for row_idx in range(scan_r_start, min(scan_r_end, len(all_values))):
+            cell = all_values[row_idx][col_idx].strip() \
+                   if col_idx < len(all_values[row_idx]) else ""
             if cell:
-                last_seen[col_idx] = cell   # 値があれば更新
-            # forward fill: 空でも直前の値があれば引き継ぐ
-            if col_idx in last_seen:
-                col_to_city[col_idx] = last_seen[col_idx]
+                city_name = _normalize_city(cell)   # スペース除去して格納
+                break
+
+        if city_name:
+            col_to_city[col_idx] = city_name
+        elif col_idx - 1 in col_to_city:
+            # 縦スキャンで見つからなかった → 左隣の都市名を引き継ぐ
+            col_to_city[col_idx] = col_to_city[col_idx - 1]
 
     # ユニーク都市リスト (列順を保持、重複除去)
     seen: set[str] = set()
@@ -395,7 +404,7 @@ if search_clicked:
     if not city_input or weight_input <= 0:
         st.warning("行先と重量（0より大きい値）を入力してください。")
     else:
-        matched_city, candidates = fuzzy_city_match(city_input, city_list)
+        matched_city, candidates = fuzzy_city_match(_normalize_city(city_input), city_list)
         matched_weight = find_weight_ceiling(weight_input, weights)
 
         # --- 都市名マッチ結果 ---

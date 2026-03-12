@@ -20,7 +20,7 @@ spreadsheets:
 
 # スプレッドシートのデータ構造設定
 data_structure:
-  city_row_start: 5      # 都市名が存在する行の開始（1始まり）
+  city_row_start: 4      # 都市名が存在する行の開始（1始まり）
   city_row_end: 14       # 都市名が存在する行の終了（1始まり）
   weight_col: "A"        # 重量が記載されている列
   weight_row_start: 16   # 重量データの開始行（1始まり）
