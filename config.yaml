@@ -1,0 +1,26 @@
+# 運賃検索アプリ - スプレッドシート設定
+# spreadsheet_id: Google SpreadsheetのURLに含まれるID文字列
+# 例: https://docs.google.com/spreadsheets/d/【ここがID】/edit
+
+spreadsheets:
+  - name: "2022年度版"
+    id: "1z1kFQ1akMWJ3pYpiUA1pyAgXycJwky5r"
+    sheet_index: 0        # シートのインデックス (0始まり)。sheet_nameが優先されます。
+    sheet_name: ""        # シート名で指定する場合はここに入力 (空欄=インデックスを使用)
+
+  - name: "2025年度版"
+    id: "YOUR_SPREADSHEET_ID_2025"
+    sheet_index: 0
+    sheet_name: ""
+
+  - name: "テスト"
+    id: "YOUR_SPREADSHEET_ID_TEST"
+    sheet_index: 0
+    sheet_name: ""
+
+# スプレッドシートのデータ構造設定
+data_structure:
+  city_row_start: 5      # 都市名が存在する行の開始（1始まり）
+  city_row_end: 14       # 都市名が存在する行の終了（1始まり）
+  weight_col: "A"        # 重量が記載されている列
+  weight_row_start: 16   # 重量データの開始行（1始まり）
