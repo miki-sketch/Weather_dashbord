@@ -201,16 +201,21 @@ def load_fare_data(spreadsheet_id: str, sheet_name: str, sheet_index: int,
 
     city_header_rows = all_values[r_start:r_end]
 
-    # 結合セル対応: 各列について「最初に現れた非空値」を採用
+    # 結合セル対応: 行を上から下にスキャンし、空セルは直前の値を引き継ぐ (forward fill)
     # col 0 = A列 (重量列) なので col 1 以降が対象
     col_to_city: dict[int, str] = {}
     max_col = max((len(row) for row in city_header_rows), default=0)
 
-    for col_idx in range(1, max_col):
-        for row in city_header_rows:
-            if col_idx < len(row) and row[col_idx].strip():
-                col_to_city[col_idx] = row[col_idx].strip()
-                break  # その列の最初の非空値を採用
+    # 各列の「直前に見た非空値」を保持するバッファ
+    last_seen: dict[int, str] = {}
+    for row in city_header_rows:
+        for col_idx in range(1, max_col):
+            cell = row[col_idx].strip() if col_idx < len(row) else ""
+            if cell:
+                last_seen[col_idx] = cell   # 値があれば更新
+            # forward fill: 空でも直前の値があれば引き継ぐ
+            if col_idx in last_seen:
+                col_to_city[col_idx] = last_seen[col_idx]
 
     # ユニーク都市リスト (列順を保持、重複除去)
     seen: set[str] = set()
