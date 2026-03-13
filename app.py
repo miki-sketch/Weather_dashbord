@@ -163,35 +163,23 @@ def _parse_number(text: str) -> Optional[float]:
         return None
 
 
-def _is_distance_tier(raw: str) -> bool:
-    """
-    A列の値が距離設定（純粋な整数）かどうか判定する。
-    "100", "200", "１００" → True
-    "上海", "バンコク", "500cc" → False
-    """
-    normalized = raw.strip().translate(
-        str.maketrans("０１２３４５６７８９，", "0123456789,")
-    )
-    return bool(re.fullmatch(r"[\d,]+", normalized))
-
-
 # ============================================================
-# データ取得 (OKTable: A=都市名/距離設定, B=重量, C=運賃, D=距離参考)
+# データ取得 (OKTable: A=都市名, B=重量, C=運賃, D=距離設定)
 # ============================================================
 @st.cache_data(ttl=3600, show_spinner="スプレッドシートからデータを取得しています...")
 def load_fare_data(spreadsheet_id: str, sheet_name: str) -> tuple:
     """
     OKTable シートを読み込み、運賃テーブルを構築する。
 
-    A列が都市名 → fare_table に格納（都市名マッチ用）
-    A列が純粋な数値 → distance_fare_table に格納（距離マッチ用）
+    全行を fare_table（都市名マッチ用）に格納する。
+    D列に数値がある行は distance_fare_table（距離マッチ用）にも格納する。
 
     Returns:
         unique_cities       : ユニークな都市名リスト（正規化済み、出現順）
         weights             : 重量リスト（昇順・重複なし）
         fare_table          : dict[正規化都市名][重量(float)] = 運賃(float)
         distance_map        : dict[正規化都市名] = 距離文字列（D列）
-        distance_fare_table : dict[距離km(float)][重量(float)] = 運賃(float)
+        distance_fare_table : dict[D列距離(float)][重量(float)] = 運賃(float)
     """
     gc = get_gspread_client()
 
@@ -244,16 +232,7 @@ def load_fare_data(spreadsheet_id: str, sheet_name: str) -> tuple:
         if weight is None or fare is None:
             continue
 
-        # A列が純粋な数値 → 距離タリフエントリとして分類
-        if _is_distance_tier(city_raw):
-            dist_km = _parse_number(city_raw)
-            if dist_km is not None:
-                if dist_km not in distance_fare_table:
-                    distance_fare_table[dist_km] = {}
-                distance_fare_table[dist_km][weight] = fare
-            continue
-
-        # 都市名エントリ
+        # 全行を都市名で fare_table に格納
         city = _normalize_city(city_raw)
         if city not in seen_set:
             seen_cities.append(city)
@@ -261,8 +240,14 @@ def load_fare_data(spreadsheet_id: str, sheet_name: str) -> tuple:
             fare_table[city] = {}
         fare_table[city][weight] = fare
 
+        # D列に数値がある行は distance_fare_table にも格納（距離マッチ用）
         if city not in distance_map and distance_raw:
             distance_map[city] = distance_raw
+        d_val = _parse_number(distance_raw)
+        if d_val is not None:
+            if d_val not in distance_fare_table:
+                distance_fare_table[d_val] = {}
+            distance_fare_table[d_val][weight] = fare
 
     if not fare_table and not distance_fare_table:
         st.error(
@@ -271,10 +256,7 @@ def load_fare_data(spreadsheet_id: str, sheet_name: str) -> tuple:
         )
         st.stop()
 
-    all_weights = sorted(
-        {w for city_data in fare_table.values() for w in city_data}
-        | {w for dist_data in distance_fare_table.values() for w in dist_data}
-    )
+    all_weights = sorted({w for city_data in fare_table.values() for w in city_data})
 
     return seen_cities, all_weights, fare_table, distance_map, distance_fare_table
 
