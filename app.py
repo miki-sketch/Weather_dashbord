@@ -320,7 +320,9 @@ def write_search_log(
         load_search_log_cache.clear()
 
     except Exception as e:
-        st.warning(f"検索ログの書き込みに失敗しました: {e}")
+        st.error(f"【デバッグ】検索ログ書き込みエラー: {type(e).__name__}: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 # ============================================================
 # Google Maps Distance Matrix API
