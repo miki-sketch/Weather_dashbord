@@ -299,9 +299,13 @@ def write_search_log(
 
         try:
             log_ws = ss.worksheet(LOG_SHEET_NAME)
+            # 既存シートでもヘッダーがなければ1行目に挿入
+            first_row = log_ws.row_values(1)
+            if not first_row:
+                log_ws.insert_row(LOG_HEADERS, 1)
         except gspread.exceptions.WorksheetNotFound:
             log_ws = ss.add_worksheet(title=LOG_SHEET_NAME, rows=1000, cols=10)
-            log_ws.append_row(LOG_HEADERS)
+            log_ws.insert_row(LOG_HEADERS, 1)
 
         now = datetime.datetime.now().strftime("%Y/%m/%d %H:%M")
         log_ws.append_row([
